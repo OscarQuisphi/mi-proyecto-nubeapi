@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sistema de Seguimiento de Titulación - Taller JS</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;margin:0;background:#f5f7fa;color:#23313f;transition:background .25s ease}
+    header{background:#1c466e;color:#fff;padding:18px 28px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:10}
+    nav{background:#e9eef3;padding:10px 24px;display:flex;gap:10px;flex-wrap:wrap;position:sticky;top:76px;z-index:9}
+    nav button,.btn{padding:10px 14px;border:1px solid #5c7892;border-radius:7px;background:#fff;cursor:pointer;transition:.2s}
+    nav button:hover,.btn:hover{transform:translateY(-1px);box-shadow:0 3px 8px #0002}
+    nav button.activo{background:#1c466e;color:#fff}
+    .layout{display:grid;grid-template-columns:250px 1fr;gap:20px;padding:20px}
+    aside{background:#fff;border:1px solid #ccd5dd;border-radius:10px;padding:18px;height:max-content;position:sticky;top:138px}
+    aside button{width:100%;margin:6px 0}
+    main{background:#fff;border-radius:10px;padding:20px;min-height:750px}
+    .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+    .card{border:1px solid #ccd5dd;border-radius:10px;padding:16px;transition:.25s}
+    .card:hover{transform:scale(1.02)}
+    .card strong{font-size:30px;color:#1c466e}
+    .filters{display:flex;gap:10px;margin:18px 0;flex-wrap:wrap}
+    .filters input,.filters select,input,select{padding:9px;border:1px solid #aab6c0;border-radius:6px;outline:none}
+    input.en-foco,select.en-foco{border-color:#1c466e;box-shadow:0 0 0 3px #1c466e22;background:#f8fbff}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #d7dde2;padding:11px;text-align:left}
+    .tag{padding:4px 8px;border-radius:10px;background:#eef2f5}
+    .tag.retraso{background:#ffe4e4;color:#a31212;font-weight:bold}
+    .tag.completado{background:#e3f7e8;color:#146c2e;font-weight:bold}
+    .note{margin-top:18px;background:#fff8df;border:1px solid #d5a62c;padding:12px;border-radius:8px}
+    .actividad{margin-top:18px;background:#eef7ff;border-left:5px solid #1c466e;padding:12px;border-radius:8px}
+    #scrollMsg{position:fixed;right:18px;bottom:18px;background:#1c466e;color:#fff;padding:10px 14px;border-radius:10px;opacity:0;transform:translateY(12px);transition:.3s;pointer-events:none}
+    #scrollMsg.visible{opacity:1;transform:translateY(0)}
+    footer{padding:18px 28px;background:#28323c;color:#fff}
+    dialog{border:0;border-radius:12px;box-shadow:0 10px 40px #0004;width:min(420px,90vw)}
+    form{display:grid;gap:10px}label{font-size:14px;display:grid;gap:4px}
+    .resaltado{background:#fff4c2!important}
+    @media(max-width:900px){.layout{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,1fr)}aside{position:static}nav{top:76px}}
+    @media(max-width:600px){.cards{grid-template-columns:1fr}header{align-items:flex-start;gap:10px;flex-direction:column}nav{position:static}.layout{padding:10px}}
+  </style>
+</head>
+<body>
+  <header>
+    <div><b>UP | FIEC</b><h2 style="margin:4px 0">Sistema de Seguimiento de Titulación de Posgrado</h2></div>
+    <div><span id="userLabel">Usuario: Coordinador</span></div>
+  </header>
+
+  <nav aria-label="Navegación principal">
+    <button data-vista="Dashboard" class="activo">Dashboard</button>
+    <button data-vista="Estudiantes">Estudiantes</button>
+    <button data-vista="Flujo BPMN">Flujo BPMN</button>
+    <button data-vista="Reportes">Reportes</button>
+    <button data-vista="Configuración">Configuración</button>
+  </nav>
+
+  <div class="layout">
+    <aside>
+      <h3>Accesos rápidos</h3>
+      <button class="btn" id="btnRegistrar">+ Registrar estudiante</button>
+      <button class="btn" data-estado="Pendiente">Pendientes</button>
+      <button class="btn" data-estado="Retraso">Alertas de retraso</button>
+      <button class="btn" id="btnExportar">Exportar reporte</button>
+      <button class="btn" id="btnResaltar">Resaltar retrasos</button>
+    </aside>
+
+    <main id="main">
+      <section>
+        <h3>Indicadores del proceso</h3>
+        <div class="cards">
+          <div class="card">Estudiantes activos<br><strong id="kpiActivos">128</strong></div>
+          <div class="card">En revisión<br><strong>34</strong></div>
+          <div class="card">Con retraso<br><strong id="kpiRetraso">12</strong></div>
+          <div class="card">Tiempo promedio<br><strong>18 días</strong></div>
+        </div>
+      </section>
+
+      <article>
+        <h3 id="tituloVista">Seguimiento de estudiantes</h3>
+        <div class="filters">
+          <input id="buscar" placeholder="Nombre o cédula" aria-label="Buscar estudiante">
+          <select id="estado" aria-label="Filtrar por estado">
+            <option>Todos</option>
+            <option>Pendiente</option>
+            <option>En proceso</option>
+            <option>Retraso</option>
+            <option>Completado</option>
+          </select>
+        </div>
+
+        <table>
+          <thead><tr><th>Estudiante</th><th>Programa</th><th>Etapa</th><th>Estado</th><th>Acción</th></tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </article>
+
+      <div class="note">
+        <b>Eventos implementados:</b> clic en botones, foco en campos, scroll de la página, cambio de filtros y envío del formulario.
+      </div>
+
+      <div class="actividad" id="actividad">
+        <b>Actividad actual:</b> Interactúa con los controles para observar cómo JavaScript modifica el DOM y los estilos dinámicamente.
+      </div>
+    </main>
+  </div>
+
+  <footer>Universidad de Panamá | Proyecto académico | © 2026</footer>
+
+  <div id="scrollMsg">Has desplazado la página más de 250 px</div>
+
+  <dialog id="dlg">
+    <form id="frm">
+      <h3 id="formTitle">Registrar estudiante</h3>
+      <label>Nombre
+        <input id="nombre" required minlength="3">
+      </label>
+      <label>Cédula
+        <input id="cedula" required placeholder="8-123-4567">
+      </label>
+      <label>Programa
+        <select id="programa">
+          <option>Maestría en Ciencias Computacionales</option>
+          <option>Posgrado en TI</option>
+        </select>
+      </label>
+      <label>Etapa
+        <select id="etapa">
+          <option>Revisión documental</option>
+          <option>Aprobación de asesor</option>
+          <option>Sustentación</option>
+          <option>Entrega de diploma</option>
+        </select>
+      </label>
+      <label>Estado
+        <select id="nuevoEstado">
+          <option>Pendiente</option>
+          <option>En proceso</option>
+          <option>Retraso</option>
+          <option>Completado</option>
+        </select>
+      </label>
+      <div>
+        <button type="submit" class="btn">Guardar</button>
+        <button type="button" class="btn" id="btnCancelar">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/assets/script.js"></script>
+</body>
+</html>
