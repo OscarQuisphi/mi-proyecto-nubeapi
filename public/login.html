@@ -1,5 +1,185 @@
-<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Login - Titulación</title><style>
-body{font-family:Arial,sans-serif;background:#eef3f8;display:grid;place-items:center;height:100vh;margin:0}.box{background:white;padding:28px;border-radius:12px;box-shadow:0 12px 30px #0002;width:min(360px,90vw)}h2{color:#1c466e}label{display:grid;gap:5px;margin:12px 0}input{padding:10px;border:1px solid #aab6c0;border-radius:6px}button{width:100%;padding:11px;background:#1c466e;color:white;border:0;border-radius:7px;cursor:pointer}.msg{min-height:24px;color:#a31212;margin-top:10px}.hint{font-size:13px;background:#f5f7fa;padding:8px;border-radius:6px}
-</style></head><body><form class="box" id="loginForm"><h2>Acceso al sistema</h2><p>Sistema de Seguimiento de Titulación</p><label>Usuario<input id="usuario" value="admin" required></label><label>Contraseña<input id="password" type="password" value="Admin123*" required></label><button>Iniciar sesión</button><div class="msg" id="msg"></div><div class="hint">Prueba académica: admin / Admin123*</div></form><script>
-loginForm.addEventListener('submit', async e=>{e.preventDefault();msg.textContent='';const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({usuario:usuario.value,password:password.value})});const d=await r.json();if(r.ok) location.href='/'; else msg.textContent=d.error||'Error';});
-</script></body></html>
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Login - Titulación</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #eef3f8;
+      display: grid;
+      place-items: center;
+      height: 100vh;
+      margin: 0;
+    }
+
+    .box {
+      background: white;
+      padding: 28px;
+      border-radius: 12px;
+      box-shadow: 0 12px 30px #0002;
+      width: min(360px, 90vw);
+    }
+
+    h2 {
+      color: #1c466e;
+    }
+
+    label {
+      display: grid;
+      gap: 5px;
+      margin: 12px 0;
+    }
+
+    input {
+      padding: 10px;
+      border: 1px solid #aab6c0;
+      border-radius: 6px;
+    }
+
+    button {
+      width: 100%;
+      padding: 11px;
+      background: #1c466e;
+      color: white;
+      border: 0;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+
+    .msg {
+      min-height: 24px;
+      color: #a31212;
+      margin-top: 10px;
+    }
+
+    .hint {
+      font-size: 13px;
+      background: #f5f7fa;
+      padding: 8px;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+
+<body>
+
+<form class="box" id="loginForm">
+
+  <h2>Acceso al sistema</h2>
+
+  <p>Sistema de Seguimiento de Titulación</p>
+
+  <label>
+    Usuario
+    <input
+      id="usuario"
+      name="usuario"
+      value="admin"
+      autocomplete="username"
+      required
+    >
+  </label>
+
+  <label>
+    Contraseña
+    <input
+      id="password"
+      name="password"
+      type="password"
+      value="Admin123*"
+      autocomplete="current-password"
+      required
+    >
+  </label>
+
+  <button id="btnLogin" type="submit">
+    Iniciar sesión
+  </button>
+
+  <div class="msg" id="msg"></div>
+
+  <div class="hint">
+    Prueba académica: admin / Admin123*
+  </div>
+
+</form>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+
+  const loginForm = document.getElementById('loginForm');
+  const usuario = document.getElementById('usuario');
+  const password = document.getElementById('password');
+  const msg = document.getElementById('msg');
+  const btnLogin = document.getElementById('btnLogin');
+
+  loginForm.addEventListener('submit', async (event) => {
+
+    event.preventDefault();
+
+    msg.textContent = '';
+    btnLogin.disabled = true;
+    btnLogin.textContent = 'Ingresando...';
+
+    try {
+
+      const response = await fetch('/api/login', {
+        method: 'POST',
+
+        headers: {
+          'Content-Type': 'application/json'
+        },
+
+        credentials: 'same-origin',
+
+        body: JSON.stringify({
+          usuario: usuario.value,
+          password: password.value
+        })
+      });
+
+      const data = await response.json();
+
+      console.log('Login status:', response.status);
+      console.log('Login response:', data);
+
+      if (response.ok) {
+
+        window.location.assign('/');
+
+        return;
+      }
+
+      msg.textContent =
+        data.error || 'Usuario o contraseña incorrectos.';
+
+    } catch (error) {
+
+      console.error('Error en login:', error);
+
+      msg.textContent =
+        'No se pudo conectar con el servidor.';
+
+    } finally {
+
+      btnLogin.disabled = false;
+      btnLogin.textContent = 'Iniciar sesión';
+
+    }
+
+  });
+
+});
+</script>
+
+</body>
+</html>
