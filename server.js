@@ -1,28 +1,49 @@
 const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcrypt');
-const sqlite3 = require('sqlite3').verbose();
+const { neon } = require('@neondatabase/serverless');
 const path = require('path');
-const fs = require('fs');
 
 const app = express();
-const PORT = 3000;
-const dbDir = path.join(__dirname, 'database');
-const dbPath = path.join(dbDir, 'titulacion.db');
-if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
-const db = new sqlite3.Database(dbPath);
+const PORT = process.env.PORT || 3000;
+
+// ========================================
+// BASE DE DATOS NEON / POSTGRESQL
+// ========================================
+
+if (!process.env.DATABASE_URL) {
+  console.error('ERROR: DATABASE_URL no está configurada.');
+  process.exit(1);
+}
+
+const sql = neon(process.env.DATABASE_URL);
+
+// ========================================
+// MIDDLEWARE
+// ========================================
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
 app.use(session({
-  secret: 'crud-academico-up-2026-cambiar-en-produccion',
+  secret: process.env.SESSION_SECRET || 'solo-desarrollo-local',
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: 'lax', maxAge: 60 * 60 * 1000 }
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 60 * 60 * 1000
+  }
 }));
+
+// ========================================
+// FUNCIONES AUXILIARES
+// ========================================
 
 function cleanText(value, max = 120) {
   if (typeof value !== 'string') return '';
+
   return value
     .replace(/[<>]/g, '')
     .replace(/[\u0000-\u001F\u007F]/g, '')
@@ -31,160 +52,664 @@ function cleanText(value, max = 120) {
 }
 
 function requireAuth(req, res, next) {
-  if (req.session?.user) return next();
-  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Sesión no válida. Inicie sesión.' });
+  if (req.session?.user) {
+    return next();
+  }
+
+  if (req.path.startsWith('/api/')) {
+    return res.status(401).json({
+      error: 'Sesión no válida. Inicie sesión.'
+    });
+  }
+
   return res.redirect('/login.html');
 }
 
-function run(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err); else resolve({ id: this.lastID, changes: this.changes });
-    });
-  });
-}
-function all(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows));
-  });
-}
-function get(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => err ? reject(err) : resolve(row));
-  });
-}
+// ========================================
+// INICIALIZAR BASE DE DATOS
+// ========================================
 
 async function initializeDatabase() {
-  await run(`CREATE TABLE IF NOT EXISTS usuarios (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    usuario TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    rol TEXT NOT NULL DEFAULT 'Coordinador'
-  )`);
 
-  await run(`CREATE TABLE IF NOT EXISTS estudiantes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nombre TEXT NOT NULL,
-    cedula TEXT NOT NULL,
-    programa TEXT NOT NULL,
-    etapa TEXT NOT NULL DEFAULT 'Revisión documental',
-    estado TEXT NOT NULL CHECK(estado IN ('Pendiente','En proceso','Retraso','Completado')),
-    creado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
-    actualizado_en DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
+  await sql`
+    CREATE TABLE IF NOT EXISTS usuarios (
+      id SERIAL PRIMARY KEY,
+      usuario VARCHAR(40) UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      rol VARCHAR(40) NOT NULL DEFAULT 'Coordinador'
+    )
+  `;
 
-  const admin = await get('SELECT id FROM usuarios WHERE usuario = ?', ['admin']);
-  if (!admin) {
+  await sql`
+    CREATE TABLE IF NOT EXISTS estudiantes (
+      id SERIAL PRIMARY KEY,
+      nombre VARCHAR(100) NOT NULL,
+      cedula VARCHAR(20) NOT NULL,
+      programa VARCHAR(100) NOT NULL,
+      etapa VARCHAR(80) NOT NULL DEFAULT 'Revisión documental',
+      estado VARCHAR(30) NOT NULL
+        CHECK (
+          estado IN (
+            'Pendiente',
+            'En proceso',
+            'Retraso',
+            'Completado'
+          )
+        ),
+      creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      actualizado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `;
+
+  // Crear usuario administrador si no existe
+  const admin = await sql`
+    SELECT id
+    FROM usuarios
+    WHERE usuario = 'admin'
+  `;
+
+  if (admin.length === 0) {
+
     const hash = await bcrypt.hash('Admin123*', 10);
-    await run('INSERT INTO usuarios (usuario, password_hash, rol) VALUES (?, ?, ?)', ['admin', hash, 'Coordinador']);
+
+    await sql`
+      INSERT INTO usuarios (
+        usuario,
+        password_hash,
+        rol
+      )
+      VALUES (
+        'admin',
+        ${hash},
+        'Coordinador'
+      )
+    `;
+
+    console.log('Usuario administrador creado.');
   }
 
-  const count = await get('SELECT COUNT(*) AS total FROM estudiantes');
-  if (count.total === 0) {
+  // Crear datos iniciales si la tabla está vacía
+  const countResult = await sql`
+    SELECT COUNT(*)::int AS total
+    FROM estudiantes
+  `;
+
+  if (countResult[0].total === 0) {
+
     const seeds = [
-      ['Ana Torres', '8-123-4567', 'Maestría en Ciencias Computacionales', 'Revisión documental', 'Pendiente'],
-      ['Carlos Méndez', '8-456-7890', 'Posgrado en TI', 'Aprobación de asesor', 'En proceso'],
-      ['María López', 'PE-12-3456', 'Maestría en Ciencias Computacionales', 'Sustentación', 'Retraso'],
-      ['José Rodríguez', '8-888-1122', 'Posgrado en TI', 'Entrega de diploma', 'Completado']
+      [
+        'Ana Torres',
+        '8-123-4567',
+        'Maestría en Ciencias Computacionales',
+        'Revisión documental',
+        'Pendiente'
+      ],
+      [
+        'Carlos Méndez',
+        '8-456-7890',
+        'Posgrado en TI',
+        'Aprobación de asesor',
+        'En proceso'
+      ],
+      [
+        'María López',
+        'PE-12-3456',
+        'Maestría en Ciencias Computacionales',
+        'Sustentación',
+        'Retraso'
+      ],
+      [
+        'José Rodríguez',
+        '8-888-1122',
+        'Posgrado en TI',
+        'Entrega de diploma',
+        'Completado'
+      ]
     ];
-    for (const s of seeds) await run('INSERT INTO estudiantes (nombre, cedula, programa, etapa, estado) VALUES (?, ?, ?, ?, ?)', s);
+
+    for (const estudiante of seeds) {
+
+      await sql`
+        INSERT INTO estudiantes (
+          nombre,
+          cedula,
+          programa,
+          etapa,
+          estado
+        )
+        VALUES (
+          ${estudiante[0]},
+          ${estudiante[1]},
+          ${estudiante[2]},
+          ${estudiante[3]},
+          ${estudiante[4]}
+        )
+      `;
+    }
+
+    console.log('Datos iniciales creados.');
   }
 }
 
-app.get('/login.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
+// ========================================
+// LOGIN
+// ========================================
+
+app.get('/login.html', (req, res) => {
+
+  res.sendFile(
+    path.join(__dirname, 'public', 'login.html')
+  );
+
+});
+
 app.post('/api/login', async (req, res) => {
+
   try {
+
     const usuario = cleanText(req.body.usuario, 40);
     const password = String(req.body.password || '');
-    const user = await get('SELECT * FROM usuarios WHERE usuario = ?', [usuario]);
-    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-      return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
+
+    const users = await sql`
+      SELECT *
+      FROM usuarios
+      WHERE usuario = ${usuario}
+    `;
+
+    const user = users[0];
+
+    if (
+      !user ||
+      !(await bcrypt.compare(password, user.password_hash))
+    ) {
+
+      return res.status(401).json({
+        error: 'Usuario o contraseña incorrectos.'
+      });
     }
-    req.session.user = { id: user.id, usuario: user.usuario, rol: user.rol };
-    res.json({ message: 'Inicio de sesión correcto.', user: req.session.user });
-  } catch (e) {
-    console.error(e); res.status(500).json({ error: 'Error interno del servidor.' });
+
+    req.session.user = {
+      id: user.id,
+      usuario: user.usuario,
+      rol: user.rol
+    };
+
+    res.json({
+      message: 'Inicio de sesión correcto.',
+      user: req.session.user
+    });
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      error: 'Error interno del servidor.'
+    });
   }
 });
-app.post('/api/logout', (req, res) => req.session.destroy(() => res.json({ message: 'Sesión cerrada.' })));
-app.get('/api/session', requireAuth, (req, res) => res.json({ user: req.session.user }));
 
-app.get('/', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-app.use('/assets', express.static(path.join(__dirname, 'public')));
+// ========================================
+// LOGOUT
+// ========================================
+
+app.post('/api/logout', (req, res) => {
+
+  req.session.destroy(() => {
+
+    res.json({
+      message: 'Sesión cerrada.'
+    });
+
+  });
+
+});
+
+// ========================================
+// CONSULTAR SESIÓN
+// ========================================
+
+app.get('/api/session', requireAuth, (req, res) => {
+
+  res.json({
+    user: req.session.user
+  });
+
+});
+
+// ========================================
+// FRONTEND
+// ========================================
+
+app.get('/', requireAuth, (req, res) => {
+
+  res.sendFile(
+    path.join(__dirname, 'public', 'index.html')
+  );
+
+});
+
+app.use(
+  '/assets',
+  express.static(
+    path.join(__dirname, 'public')
+  )
+);
+
+// ========================================
+// READ - LISTAR ESTUDIANTES
+// ========================================
 
 app.get('/api/estudiantes', requireAuth, async (req, res) => {
+
   try {
-    const estado = cleanText(req.query.estado || '', 30);
-    const buscar = cleanText(req.query.buscar || '', 80);
-    let sql = 'SELECT * FROM estudiantes WHERE 1=1';
-    const params = [];
-    if (estado && estado !== 'Todos') { sql += ' AND estado = ?'; params.push(estado); }
-    if (buscar) { sql += ' AND (nombre LIKE ? OR cedula LIKE ?)'; params.push(`%${buscar}%`, `%${buscar}%`); }
-    sql += ' ORDER BY id DESC';
-    res.json(await all(sql, params));
-  } catch (e) { console.error(e); res.status(500).json({ error: 'No se pudo consultar.' }); }
+
+    const estado =
+      cleanText(req.query.estado || '', 30);
+
+    const buscar =
+      cleanText(req.query.buscar || '', 80);
+
+    let estudiantes;
+
+    if (
+      estado &&
+      estado !== 'Todos' &&
+      buscar
+    ) {
+
+      estudiantes = await sql`
+        SELECT *
+        FROM estudiantes
+        WHERE estado = ${estado}
+        AND (
+          nombre ILIKE ${'%' + buscar + '%'}
+          OR cedula ILIKE ${'%' + buscar + '%'}
+        )
+        ORDER BY id DESC
+      `;
+
+    } else if (
+      estado &&
+      estado !== 'Todos'
+    ) {
+
+      estudiantes = await sql`
+        SELECT *
+        FROM estudiantes
+        WHERE estado = ${estado}
+        ORDER BY id DESC
+      `;
+
+    } else if (buscar) {
+
+      estudiantes = await sql`
+        SELECT *
+        FROM estudiantes
+        WHERE
+          nombre ILIKE ${'%' + buscar + '%'}
+          OR cedula ILIKE ${'%' + buscar + '%'}
+        ORDER BY id DESC
+      `;
+
+    } else {
+
+      estudiantes = await sql`
+        SELECT *
+        FROM estudiantes
+        ORDER BY id DESC
+      `;
+
+    }
+
+    res.json(estudiantes);
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      error: 'No se pudo consultar.'
+    });
+
+  }
+
 });
+
+// ========================================
+// READ - ESTUDIANTE POR ID
+// ========================================
 
 app.get('/api/estudiantes/:id', requireAuth, async (req, res) => {
+
   try {
-    const row = await get('SELECT * FROM estudiantes WHERE id = ?', [req.params.id]);
-    if (!row) return res.status(404).json({ error: 'Registro no encontrado.' });
-    res.json(row);
-  } catch (e) { res.status(500).json({ error: 'Error al consultar.' }); }
+
+    const rows = await sql`
+      SELECT *
+      FROM estudiantes
+      WHERE id = ${req.params.id}
+    `;
+
+    if (rows.length === 0) {
+
+      return res.status(404).json({
+        error: 'Registro no encontrado.'
+      });
+
+    }
+
+    res.json(rows[0]);
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      error: 'Error al consultar.'
+    });
+
+  }
+
 });
+
+// ========================================
+// CREATE
+// ========================================
 
 app.post('/api/estudiantes', requireAuth, async (req, res) => {
+
   try {
-    const nombre = cleanText(req.body.nombre, 100);
-    const cedula = cleanText(req.body.cedula, 20);
-    const programa = cleanText(req.body.programa, 100);
-    const etapa = cleanText(req.body.etapa || 'Revisión documental', 80);
-    const estado = cleanText(req.body.estado, 30);
-    const validStates = ['Pendiente', 'En proceso', 'Retraso', 'Completado'];
-    if (nombre.length < 3 || !cedula || !programa || !validStates.includes(estado)) {
-      return res.status(400).json({ error: 'Datos inválidos o incompletos.' });
+
+    const nombre =
+      cleanText(req.body.nombre, 100);
+
+    const cedula =
+      cleanText(req.body.cedula, 20);
+
+    const programa =
+      cleanText(req.body.programa, 100);
+
+    const etapa =
+      cleanText(
+        req.body.etapa || 'Revisión documental',
+        80
+      );
+
+    const estado =
+      cleanText(req.body.estado, 30);
+
+    const validStates = [
+      'Pendiente',
+      'En proceso',
+      'Retraso',
+      'Completado'
+    ];
+
+    if (
+      nombre.length < 3 ||
+      !cedula ||
+      !programa ||
+      !validStates.includes(estado)
+    ) {
+
+      return res.status(400).json({
+        error: 'Datos inválidos o incompletos.'
+      });
+
     }
-    const result = await run('INSERT INTO estudiantes (nombre, cedula, programa, etapa, estado) VALUES (?, ?, ?, ?, ?)', [nombre, cedula, programa, etapa, estado]);
-    res.status(201).json({ message: 'Estudiante creado correctamente.', id: result.id });
-  } catch (e) { console.error(e); res.status(500).json({ error: 'No se pudo crear el registro.' }); }
+
+    const result = await sql`
+      INSERT INTO estudiantes (
+        nombre,
+        cedula,
+        programa,
+        etapa,
+        estado
+      )
+      VALUES (
+        ${nombre},
+        ${cedula},
+        ${programa},
+        ${etapa},
+        ${estado}
+      )
+      RETURNING id
+    `;
+
+    res.status(201).json({
+      message: 'Estudiante creado correctamente.',
+      id: result[0].id
+    });
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      error: 'No se pudo crear el registro.'
+    });
+
+  }
+
 });
+
+// ========================================
+// UPDATE
+// ========================================
 
 app.put('/api/estudiantes/:id', requireAuth, async (req, res) => {
+
   try {
-    const nombre = cleanText(req.body.nombre, 100);
-    const cedula = cleanText(req.body.cedula, 20);
-    const programa = cleanText(req.body.programa, 100);
-    const etapa = cleanText(req.body.etapa, 80);
-    const estado = cleanText(req.body.estado, 30);
-    const validStates = ['Pendiente', 'En proceso', 'Retraso', 'Completado'];
-    if (nombre.length < 3 || !cedula || !programa || !etapa || !validStates.includes(estado)) {
-      return res.status(400).json({ error: 'Datos inválidos.' });
+
+    const nombre =
+      cleanText(req.body.nombre, 100);
+
+    const cedula =
+      cleanText(req.body.cedula, 20);
+
+    const programa =
+      cleanText(req.body.programa, 100);
+
+    const etapa =
+      cleanText(req.body.etapa, 80);
+
+    const estado =
+      cleanText(req.body.estado, 30);
+
+    const validStates = [
+      'Pendiente',
+      'En proceso',
+      'Retraso',
+      'Completado'
+    ];
+
+    if (
+      nombre.length < 3 ||
+      !cedula ||
+      !programa ||
+      !etapa ||
+      !validStates.includes(estado)
+    ) {
+
+      return res.status(400).json({
+        error: 'Datos inválidos.'
+      });
+
     }
-    const result = await run(`UPDATE estudiantes SET nombre=?, cedula=?, programa=?, etapa=?, estado=?, actualizado_en=CURRENT_TIMESTAMP WHERE id=?`, [nombre, cedula, programa, etapa, estado, req.params.id]);
-    if (!result.changes) return res.status(404).json({ error: 'Registro no encontrado.' });
-    res.json({ message: 'Estudiante actualizado correctamente.' });
-  } catch (e) { res.status(500).json({ error: 'No se pudo actualizar.' }); }
+
+    const result = await sql`
+      UPDATE estudiantes
+      SET
+        nombre = ${nombre},
+        cedula = ${cedula},
+        programa = ${programa},
+        etapa = ${etapa},
+        estado = ${estado},
+        actualizado_en = CURRENT_TIMESTAMP
+      WHERE id = ${req.params.id}
+      RETURNING id
+    `;
+
+    if (result.length === 0) {
+
+      return res.status(404).json({
+        error: 'Registro no encontrado.'
+      });
+
+    }
+
+    res.json({
+      message: 'Estudiante actualizado correctamente.'
+    });
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      error: 'No se pudo actualizar.'
+    });
+
+  }
+
 });
+
+// ========================================
+// DELETE
+// ========================================
 
 app.delete('/api/estudiantes/:id', requireAuth, async (req, res) => {
+
   try {
-    const result = await run('DELETE FROM estudiantes WHERE id = ?', [req.params.id]);
-    if (!result.changes) return res.status(404).json({ error: 'Registro no encontrado.' });
-    res.json({ message: 'Estudiante eliminado correctamente.' });
-  } catch (e) { res.status(500).json({ error: 'No se pudo eliminar.' }); }
+
+    const result = await sql`
+      DELETE FROM estudiantes
+      WHERE id = ${req.params.id}
+      RETURNING id
+    `;
+
+    if (result.length === 0) {
+
+      return res.status(404).json({
+        error: 'Registro no encontrado.'
+      });
+
+    }
+
+    res.json({
+      message: 'Estudiante eliminado correctamente.'
+    });
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      error: 'No se pudo eliminar.'
+    });
+
+  }
+
 });
+
+// ========================================
+// KPIs
+// ========================================
 
 app.get('/api/kpis', requireAuth, async (req, res) => {
-  const total = await get('SELECT COUNT(*) total FROM estudiantes');
-  const retraso = await get("SELECT COUNT(*) total FROM estudiantes WHERE estado='Retraso'");
-  const proceso = await get("SELECT COUNT(*) total FROM estudiantes WHERE estado='En proceso'");
-  res.json({ activos: total.total, retraso: retraso.total, proceso: proceso.total });
+
+  try {
+
+    const total = await sql`
+      SELECT COUNT(*)::int AS total
+      FROM estudiantes
+    `;
+
+    const retraso = await sql`
+      SELECT COUNT(*)::int AS total
+      FROM estudiantes
+      WHERE estado = 'Retraso'
+    `;
+
+    const proceso = await sql`
+      SELECT COUNT(*)::int AS total
+      FROM estudiantes
+      WHERE estado = 'En proceso'
+    `;
+
+    res.json({
+      activos: total[0].total,
+      retraso: retraso[0].total,
+      proceso: proceso[0].total
+    });
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      error: 'No se pudieron consultar los indicadores.'
+    });
+
+  }
+
 });
 
-initializeDatabase().then(() => {
-  app.listen(PORT, () => {
-    console.log(`Servidor ejecutándose en http://localhost:${PORT}`);
-    console.log(`Base de datos SQLite: ${dbPath}`);
-    console.log('Usuario de prueba: admin | Clave: Admin123*');
+// ========================================
+// INICIALIZACIÓN
+// ========================================
+
+const initializationPromise = initializeDatabase()
+  .then(() => {
+    console.log('Base de datos PostgreSQL inicializada.');
+  })
+  .catch(error => {
+    console.error(
+      'Error inicializando PostgreSQL:',
+      error
+    );
+    throw error;
   });
-}).catch(err => { console.error('Error al inicializar la base de datos:', err); process.exit(1); });
+
+// Evita procesar solicitudes antes de inicializar las tablas.
+app.use(async (req, res, next) => {
+  try {
+    await initializationPromise;
+    next();
+  } catch (error) {
+    res.status(500).json({
+      error: 'No se pudo inicializar la base de datos.'
+    });
+  }
+});
+
+// Arranque local
+if (require.main === module) {
+
+  initializationPromise
+    .then(() => {
+
+      app.listen(PORT, () => {
+
+        console.log(
+          `Servidor ejecutándose en http://localhost:${PORT}`
+        );
+
+        console.log(
+          'Usuario de prueba: admin'
+        );
+
+      });
+
+    })
+    .catch(error => {
+
+      console.error(error);
+      process.exit(1);
+
+    });
+
+}
+
+// Vercel importa la aplicación Express
+module.exports = app;
