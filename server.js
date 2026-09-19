@@ -1,7 +1,15 @@
+//const express = require('express');
+//const session = require('express-session');
+//const bcrypt = require('bcrypt');
+//const { neon } = require('@neondatabase/serverless');
+//const path = require('path');
+
 const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcrypt');
 const { neon } = require('@neondatabase/serverless');
+const { Pool } = require('pg');
+const pgSession = require('connect-pg-simple')(session);
 const path = require('path');
 
 const app = express();
@@ -18,6 +26,10 @@ if (!process.env.DATABASE_URL) {
 
 const sql = neon(process.env.DATABASE_URL);
 
+const pgPool = new Pool({
+  connectionString: process.env.DATABASE_URL
+});
+
 // ========================================
 // MIDDLEWARE
 // ========================================
@@ -25,14 +37,37 @@ const sql = neon(process.env.DATABASE_URL);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+
+//app.use(session({
+//  secret: process.env.SESSION_SECRET || 'solo-desarrollo-local',
+//  resave: false,
+//  saveUninitialized: false,
+//  cookie: {
+//    httpOnly: true,
+//    sameSite: 'lax',
+//    secure: process.env.NODE_ENV === 'production',
+//    maxAge: 60 * 60 * 1000
+//  }
+//}));
+
+app.set('trust proxy', 1);
+
 app.use(session({
+  store: new pgSession({
+    pool: pgPool,
+    tableName: 'user_sessions',
+    createTableIfMissing: true
+  }),
+
   secret: process.env.SESSION_SECRET || 'solo-desarrollo-local',
+
   resave: false,
   saveUninitialized: false,
+
   cookie: {
     httpOnly: true,
-    sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
     maxAge: 60 * 60 * 1000
   }
 }));
